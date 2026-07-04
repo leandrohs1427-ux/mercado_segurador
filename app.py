@@ -1,7 +1,6 @@
 import time
 import streamlit as st
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.dashboards import GenieAttachmentType
 
 SPACE_ID = "01f150aaaa9e12ffb3977a7b0996556d"
 
@@ -9,27 +8,30 @@ st.set_page_config(page_title="Mercado Segurador", page_icon="🛡️", layout="
 st.title("🛡️ Mercado Segurador — Genie AI")
 st.caption("Faça perguntas sobre os dados do mercado segurador em linguagem natural.")
 
+w = WorkspaceClient(
+    host=st.secrets["DATABRICKS_HOST"],
+    token=st.secrets["DATABRICKS_TOKEN"],
+)
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "conversation_id" not in st.session_state:
     st.session_state.conversation_id = None
-
-w = WorkspaceClient()
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
 
-def wait_for_message(space_id, conversation_id, message_id, timeout=120):
+def wait_for_message(conversation_id, message_id, timeout=120):
     start = time.time()
     while time.time() - start < timeout:
         msg = w.genie.get_message(
-            space_id=space_id,
+            space_id=SPACE_ID,
             conversation_id=conversation_id,
             message_id=message_id,
         )
-        if msg.status and msg.status.value in ("COMPLETED", "FAILED", "CANCELLED", "QUERY_RESULT_EXPIRED"):
+        if msg.status and msg.status.value in ("COMPLETED", "FAILED", "CANCELLED"):
             return msg
         time.sleep(2)
     raise TimeoutError("Genie demorou demais para responder.")
@@ -39,14 +41,14 @@ def extract_response(msg):
     parts = []
     if msg.attachments:
         for att in msg.attachments:
-            if att.type == GenieAttachmentType.TEXT and att.text:
+            if hasattr(att, "text") and att.text:
                 parts.append(att.text.content)
-            elif att.type == GenieAttachmentType.QUERY and att.query:
+            if hasattr(att, "query") and att.query:
                 if att.query.description:
                     parts.append(att.query.description)
                 if att.query.query:
                     parts.append(f"```sql\n{att.query.query}\n```")
-    return "\n\n".join(parts) if parts else "Genie não retornou resposta. Tente reformular a pergunta."
+    return "\n\n".join(parts) if parts else "Genie não retornou resposta. Tente reformular."
 
 
 if prompt := st.chat_input("Ex: Quais seguradoras têm maior volume de prêmios?"):
@@ -69,7 +71,7 @@ if prompt := st.chat_input("Ex: Quais seguradoras têm maior volume de prêmios?
                     )
                     message_id = resp.message_id
 
-                msg = wait_for_message(SPACE_ID, st.session_state.conversation_id, message_id)
+                msg = wait_for_message(st.session_state.conversation_id, message_id)
                 answer = extract_response(msg)
                 st.markdown(answer)
                 st.session_state.messages.append({"role": "assistant", "content": answer})
